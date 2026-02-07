@@ -84,7 +84,10 @@ public class CategoryController {
      */
     @PostMapping("/status/{status}")
     @ApiOperation("启用禁用分类")
-    public Result<String> startOrStop(@PathVariable("status") Integer status, Long id){
+    public Result<String> startOrStop(
+            @PathVariable("status") Integer status,
+            @RequestParam Long id
+    ){
         categoryService.startOrStop(status,id);
         return Result.success();
     }
