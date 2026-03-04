@@ -26,4 +26,5 @@ public interface ShoppingCartMapper {
     @Update("update shopping_cart set number = #{number} where id = #{id}")
     void updateNumberById(ShoppingCart shoppingCart);
 
+    void insertBatch(List<ShoppingCart> shoppingCartList);
 }
