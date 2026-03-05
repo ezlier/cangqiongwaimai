@@ -1,8 +1,11 @@
 package com.sky.service.impl;
 
+import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
+import com.github.xiaoymin.knife4j.core.util.CollectionUtils;
+import com.sky.WebSocket.WebSocketServer;
 import com.sky.constant.MessageConstant;
 import com.sky.context.BaseContext;
 import com.sky.dto.*;
@@ -25,7 +28,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Service
@@ -48,6 +53,9 @@ public class OrderServiceimpl implements OrderService {
 
     @Autowired
     private UserMapper userMapper;
+
+    @Autowired
+    private WebSocketServer webSocketServer;
 
     @Override
     @Transactional
@@ -113,6 +121,15 @@ public class OrderServiceimpl implements OrderService {
                 .build();
 
         orderMapper.update(orders);
+
+        Map map = new HashMap();
+        map.put("type",1);
+        map.put("orderId",ordersDB.getId());
+        map.put("content","订单号"+outTradeNo+"支付成功");
+
+        String json = JSONObject.toJSONString(map);
+
+        webSocketServer.sendToAllClient(json);
     }
 
     @Override
@@ -193,13 +210,18 @@ public class OrderServiceimpl implements OrderService {
         orders.setId(ordersDB.getId());
 
         if (ordersDB.getStatus().equals(Orders.TO_BE_CONFIRMED)){
-            weChatPayUtil.refund(
-                    ordersDB.getNumber(),
-                    ordersDB.getNumber(),
-                    new BigDecimal(0.1),
-                    new BigDecimal(0.01)
-            );
-            orders.setPayStatus(Orders.REFUND);
+            try {
+                weChatPayUtil.refund(
+                        ordersDB.getNumber(),
+                        ordersDB.getNumber(),
+                        new BigDecimal(0.1),
+                        new BigDecimal(0.01)
+                );
+                orders.setPayStatus(Orders.REFUND);
+            } catch (Exception e) {
+                System.err.println("微信支付配置不完整或退款失败，跳过退款操作：" + e.getMessage());
+                e.printStackTrace();
+            }
         }
         orders.setStatus(Orders.CANCELLED);
         orders.setCancelReason("用户取消");
@@ -269,11 +291,17 @@ public class OrderServiceimpl implements OrderService {
         Integer payStatus = ordersDB.getPayStatus();
         if (payStatus == Orders.PAID) {
             //用户已支付，需要退款
-            String refund = weChatPayUtil.refund(
-                    ordersDB.getNumber(),
-                    ordersDB.getNumber(),
-                    new BigDecimal(0.01),
-                    new BigDecimal(0.01));
+            try {
+                String refund = weChatPayUtil.refund(
+                        ordersDB.getNumber(),
+                        ordersDB.getNumber(),
+                        new BigDecimal(0.01),
+                        new BigDecimal(0.01));
+                System.out.println("退款结果：" + refund);
+            } catch (Exception e) {
+                System.err.println("微信支付配置不完整或退款失败，跳过退款操作：" + e.getMessage());
+                e.printStackTrace();
+            }
         }
 
         // 拒单需要退款，根据订单id更新订单状态、拒单原因、取消时间
@@ -295,11 +323,17 @@ public class OrderServiceimpl implements OrderService {
         Integer payStatus = ordersDB.getPayStatus();
         if (payStatus == 1) {
             //用户已支付，需要退款
-            String refund = weChatPayUtil.refund(
-                    ordersDB.getNumber(),
-                    ordersDB.getNumber(),
-                    new BigDecimal(0.01),
-                    new BigDecimal(0.01));
+            try {
+                String refund = weChatPayUtil.refund(
+                        ordersDB.getNumber(),
+                        ordersDB.getNumber(),
+                        new BigDecimal(0.01),
+                        new BigDecimal(0.01));
+                System.out.println("退款结果：" + refund);
+            } catch (Exception e) {
+                System.err.println("微信支付配置不完整或退款失败，跳过退款操作：" + e.getMessage());
+                e.printStackTrace();
+            }
         }
 
         // 管理端取消订单需要退款，根据订单id更新订单状态、取消原因、取消时间
@@ -314,7 +348,7 @@ public class OrderServiceimpl implements OrderService {
     @Override
     public void delivery(Long id) {
         Orders ordersDB = orderMapper.getById(id);
-        if (ordersDB == null || !ordersDB.getStatus().equals(Orders.DELIVERY_IN_PROGRESS)){
+        if (ordersDB == null || !ordersDB.getStatus().equals(Orders.CONFIRMED)){
             throw new OrderBusinessException(MessageConstant.ORDER_STATUS_ERROR);
         }
         Orders orders = new Orders();
@@ -338,5 +372,65 @@ public class OrderServiceimpl implements OrderService {
         orderMapper.update(orders);
     }
 
+    @Override
+    public PageResult conditionSearch(OrdersPageQueryDTO ordersPageQueryDTO) {
+        PageHelper.startPage(ordersPageQueryDTO.getPage(), ordersPageQueryDTO.getPageSize());
 
+        Page<Orders> page = orderMapper.pageQuery(ordersPageQueryDTO);
+
+        // 部分订单状态，需要额外返回订单菜品信息，将Orders转化为OrderVO
+        List<OrderVO> orderVOList = getOrderVOList(page);
+
+        return new PageResult(page.getTotal(), orderVOList);
+    }
+
+
+
+    private List<OrderVO> getOrderVOList(Page<Orders> page) {
+        // 需要返回订单菜品信息，自定义OrderVO响应结果
+        List<OrderVO> orderVOList = new ArrayList<>();
+
+        List<Orders> ordersList = page.getResult();
+        if (!CollectionUtils.isEmpty(ordersList)) {
+            for (Orders orders : ordersList) {
+                // 将共同字段复制到OrderVO
+                OrderVO orderVO = new OrderVO();
+                BeanUtils.copyProperties(orders, orderVO);
+                String orderDishes = getOrderDishesStr(orders);
+
+                // 将订单菜品信息封装到orderVO中，并添加到orderVOList
+                orderVO.setOrderDishes(orderDishes);
+                orderVOList.add(orderVO);
+            }
+        }
+        return orderVOList;
+    }
+
+    private String getOrderDishesStr(Orders orders) {
+        List<OrderDetail> orderDetailList = orderDetailMapper.listByOrderId(orders.getId());
+
+        // 将每一条订单菜品信息拼接为字符串（格式：宫保鸡丁*3；）
+        List<String> orderDishList = orderDetailList.stream().map(x -> {
+            String orderDish = x.getName() + "*" + x.getNumber() + ";";
+            return orderDish;
+        }).collect(Collectors.toList());
+
+        // 将该订单对应的所有菜品信息拼接在一起
+        return String.join("", orderDishList);
+    }
+
+    @Override
+    public void reminder(Long id) {
+        Orders ordersDB = orderMapper.getById(id);
+
+        if (ordersDB == null){
+            throw new OrderBusinessException(MessageConstant.ORDER_STATUS_ERROR);
+        }
+        Map map = new HashMap();
+        map.put("type", 2);
+        map.put("orderId", id);
+        map.put("content", "订单号：" + ordersDB.getNumber());
+
+        webSocketServer.sendToAllClient(JSON.toJSONString(map));
+    }
 }

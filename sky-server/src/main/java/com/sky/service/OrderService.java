@@ -33,4 +33,8 @@ public interface OrderService {
     void delivery(Long id);
 
     void complete(Long id);
+
+    PageResult conditionSearch(OrdersPageQueryDTO ordersPageQueryDTO);
+
+    void reminder(Long id);
 }

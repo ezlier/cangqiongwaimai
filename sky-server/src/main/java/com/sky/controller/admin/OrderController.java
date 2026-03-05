@@ -2,7 +2,9 @@ package com.sky.controller.admin;
 
 import com.sky.dto.OrdersCancelDTO;
 import com.sky.dto.OrdersConfirmDTO;
+import com.sky.dto.OrdersPageQueryDTO;
 import com.sky.dto.OrdersRejectionDTO;
+import com.sky.result.PageResult;
 import com.sky.result.Result;
 import com.sky.service.OrderService;
 import com.sky.vo.OrderStatisticsVO;
@@ -22,6 +24,14 @@ public class OrderController {
 
     @Autowired
     private OrderService orderService;
+
+
+    @GetMapping("/conditionSearch")
+    @ApiOperation("订单搜索")
+    public Result<PageResult> conditionSearch(OrdersPageQueryDTO ordersPageQueryDTO) {
+        PageResult pageResult = orderService.conditionSearch(ordersPageQueryDTO);
+        return Result.success(pageResult);
+    }
 
     @GetMapping("/statistics")
     @ApiOperation("订单统计")
